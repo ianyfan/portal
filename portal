@@ -122,6 +122,7 @@ print_lyrics() {
                     new_line=false
                 ;; c)
                     processing_arg=false
+                    sleep ${args[1]}
                     cursor_pos_lyrics=(3 3)
                     sed -i "2s/(.*)/(3 3)/" $temp_file
                     for i in {3..35}; do
@@ -256,6 +257,7 @@ print_lyrics 'Aperture Science' -d 2.2 'We do what we must' -d .3 -n \
     "But there's no sense crying" -d 0 'over every mistake.' -d .2 \
     'You just keep on trying' -d 0 -r .068 'till you run out of cake.' -d .2 \
     -r .075 'And the science gets done.' -d 0 'And you make a neat gun.' \
-    -r .066 'For the people who are' -d .1 'still alive.' -d 1.5 -c
+    -r .066 'For the people who are' -d .1 'still alive.' -d 1.5 -c \
+    -d 99
 
 wait
