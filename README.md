@@ -1,4 +1,4 @@
-# Portal in the terminal
+# Portal credits in the terminal
 
 ```
 git clone https://www.github.com/ianyfan/portal # clone the repository
