@@ -42,16 +42,12 @@ print_lyrics() {
             # if the line is a number (not proceeded by -r)
             # then sleep until that time (in tenths of a second, i.e. 10=1s)
             # measured from the start of animation
-            if (( start + line*10**8 > $(date +%s%N) )); then
-                # check used since sleep can't receives a negative value
-                sleep $(bc <<< "scale=3; $line/10+($start-$(date +%s%N))/10^9")
-            fi
+            sleep $(bc <<< "scale=3; $line/10+($start-$(date +%s%N))/10^9") \
+                2>/dev/null
             continue
         fi
 
-        # uncomment line below for line error checking
-        # local cursor_pos_start=${cursor_pos_lyrics[1]}
-
+        local cursor_pos_start=${cursor_pos_lyrics[1]}
         local lyrics_time=$(date +%s%N)
         for (( char=0; char<${#line}; char++ )); do
 
@@ -66,18 +62,15 @@ print_lyrics() {
 
             print_cursors # redraw the cursor on the next character
 
-            if ((  lyrics_time + rate*10**6 > $(date +%s%N) )); then
-                sleep $(bc <<< \
-                    "scale=3; $rate/10^3+($lyrics_time-$(date +%s%N))/10^9" )
-            fi
+            sleep 2>/dev/null $(bc <<< \
+                "scale=3; $rate/10^3+($lyrics_time-$(date +%s%N))/10^9" )
             lyrics_time=$(date +%s%N)
         done
 
-        # uncomment line below for line error checking
-        # record new cursor position
-        # (( cursor_pos_lyrics[1]=cursor_pos_start+${#line} ))
-        # sed -i "2s/[0-9]*)/$(( cursor_pos_start+${#line} )))/" $temp_file
-        # printf "\033[${cursor_pos_lyrics[0]};"$cursor_pos_start"H$line"
+        # print the entire line again in case some characters failed to print
+        (( cursor_pos_lyrics[1]=cursor_pos_start+${#line} ))
+        sed -i "2s/[0-9]*)/$(( cursor_pos_start+${#line} )))/" $temp_file
+        printf "\033[${cursor_pos_lyrics[0]};"$cursor_pos_start"H$line"
 
         rate=88 # change rate back to default
 
@@ -216,44 +209,11 @@ source $temp_file # to avoid writing the same thing twice
 
 printf '\e[8;38;108t\[\033[48;5;0;38;5;178m\]'
 clear
-cat << EOF
- ----------------------------------------------------  ----------------------------------------------------
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    ||                                                    |
-|                                                    | ----------------------------------------------------
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
-|                                                    |
- ----------------------------------------------------
-EOF
+printf ' ---------------------------------------------------- %.0s' _ _
+printf "$(printf '|                                                    |%.0s' 1 2)\n%.0s" {1..16}
+printf '|                                                    | ----------------------------------------------------\n'
+printf '|                                                    |\n%.0s' {1..17}
+printf ' ----------------------------------------------------'
 
 while true; do
     sed -i "1s/'.*'/'${cursor_status:1:1}${cursor_status:0:1}'/" $temp_file
@@ -326,9 +286,7 @@ for ((  line_no=0; line_no<${#credits[@]}; line_no++ )); do
         printf "\033[17;$(( cursor_pos_credits-1 ))H${line:$char:1}"
         print_cursors
 
-        if ((  credits_time + 65000000 > $(date +%s%N) )); then
-            sleep $(bc <<< "scale=3; .065+($credits_time-$(date +%s%N))/10^9" )
-        fi
+        sleep $(bc <<< "scale=3; .065+($credits_time-$(date +%s%N))/10^9" ) 2>/dev/null
         credits_time=$(date +%s%N)
     done
     sed -i "3s/[0-9]*$/57/" $temp_file
