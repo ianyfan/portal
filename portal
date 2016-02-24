@@ -51,22 +51,25 @@ cat << EOF
 EOF
 
 print_cursors() {
+    # since parralel processes can't share variables
+    # they have to be written and read into a file
+    # cursor_status is a 
     source $temp_file
     printf "\033[%s;%sH${cursor_status:0:1}" ${cursor_pos_lyrics[@]}
     printf '\033[17;'$cursor_pos_credits"H${cursor_status:1:1}"
 }
 
 cat >$temp_file << EOF
-cursor_status=' _'
+cursor_status='_ '
 cursor_pos_lyrics=(2 3)
 cursor_pos_credits=57
 EOF
-source $temp_file
+source $temp_file # so that the terminal can warm up its I/O muscles
 
 while true; do
     sed -i "1s/'.*'/'${cursor_status:1:1}${cursor_status:0:1}'/" $temp_file
     print_cursors
-    sleep .32
+    sleep .3
 done &
 
 print_ascii_art() {
@@ -173,75 +176,96 @@ EOF
 }
 
 print_lyrics() {
-    local processing_arg=false
     local new_line=true
-    local args=(.088 0)
-    local arg=
+    local rate=88
+    local changing_rate=false
     for line in "${@}"; do
-        if [ "$processing_arg" = true ]; then
-            args[arg]=$line
-            processing_arg=false
+        if [ "$changing_rate" = true ]; then
+            rate=$line
+            changing_rate=false # so that the next argument doesn't get caught
             continue
-        elif [[ $line == -* ]]; then
-            processing_arg=true
+
+        if [[ $line == -* ]]; then # if "option" , currently -c -n -r
             case ${line:1:1} in
-                r ) arg=0 ;;
-                d ) arg=1 ;;
-                n )
-                    processing_arg=false
-                    new_line=false
-                ;; c)
-                    processing_arg=false
-                    sleep ${args[1]}
-                    cursor_pos_lyrics=(2 3)
-                    sed -i '2s/(.*)/(2 3)/' $temp_file
-                    for i in {2..35}; do
-                        printf "\033[$i;3H%s" \
-                            '                                                 '
-                    done
+                r ) # set a variable since the next argument will be the value
+                changing_rate=true
+             ;; n ) # set a variable to remember for the next line
+                new_line=false
+             ;; c ) # clear the screen
+                cursor_pos_lyrics=(2 3)
+                sed -i '2s/(.*)/(2 3)/' $temp_file
+                for i in {2..35}; do
+                    printf "\033[$i;3H%s" \
+                        '                                                 '
+                done
+             ;;
             esac
             continue
         fi
 
-        sleep ${args[1]}
+        if [[ $line =~ ^[0-9]+$ ]]; then
+            # if the line is a number (not proceeded by -r)
+            # then sleep until that time (in tenths of a second, i.e. 10=1s)
+            # measured from the start of animation
+            if (( start + line*10**8 > $(date +%s%N) )); then
+                # check used since sleep can't receives a negative value
+                sleep $(bc <<< "scale=3; $line/10+($start-$(date +%s%N))/10^9")
+            fi
+            continue
+        fi
 
-        local cursor_pos_start=${cursor_pos_lyrics[1]}
+        # uncomment line below for line error checking
+        # local cursor_pos_start=${cursor_pos_lyrics[1]}
+
+        local lyrics_time=$(date +%s%N)
         for (( char=0; char<${#line}; char++ )); do
             (( cursor_pos_lyrics[1]++ ))
             sed -i "2s/[0-9]*)/${cursor_pos_lyrics[1]})/" $temp_file
-            printf "\033[${cursor_pos_lyrics[0]};%sH${line:$char:1}" \
-                $(( ${cursor_pos_lyrics[1]}-1 ))
-            print_cursors
-            sleep ${args[0]}
+
+            for _ in 1 2; do # print twice because it sometimes fails first time
+                printf "\033[${cursor_pos_lyrics[0]};%sH${line:$char:1}" \
+                    $(( ${cursor_pos_lyrics[1]}-1 ))
+            done
+
+            print_cursors # redraw the cursor on the next character
+
+            if ((  lyrics_time + rate*10**6 > $(date +%s%N) )); then
+                sleep $(bc <<< \
+                    "scale=3; $rate/10^3+($lyrics_time-$(date +%s%N))/10^9" )
+            fi
+            lyrics_time=$(date +%s%N)
         done
+
+        # record new cursor position
         (( cursor_pos_lyrics[1]=cursor_pos_start+${#line} ))
         sed -i "2s/[0-9]*)/$(( cursor_pos_start+${#line} )))/" $temp_file
-        printf "\033[${cursor_pos_lyrics[0]};"$cursor_pos_start"H$line"
 
-        args[0]=.088
+        # uncomment line below for line error checking
+        # printf "\033[${cursor_pos_lyrics[0]};"$cursor_pos_start"H$line"
+
+        rate=88 # change rate back to default
 
         if [ "$new_line" = true ]; then
             last_char=${cursor_pos_lyrics[@]}
             sed -i "2s/(.*)/($(( cursor_pos_lyrics[0]+1 )) 3)/" $temp_file
+
+            # print a space over where the cursor used to be
             printf '\033[%s;%sH ' ${last_char[@]}
+
             print_cursors
         else
             new_line=true
         fi
     done
-
-    if [ "${@: -2:1}" = -d ]; then
-        sleep ${args[1]}
-    fi
 }
 
-sleep .1
-print_lyrics -r .08 'Form FORM-29827281-12:' -r .08 'Test Assessment Report' \
-    '' '' -d 2.9
+start=$(date +%s%N)
+print_lyrics 1 -r 80 'Form FORM-29827281-12:' -r 80 'Test Assessment Report' \
+    '' '' 70
 
 aplay -q still_alive.wav &
 
-print_lyrics 'This was a triumph.' -d .12
+print_lyrics 'This was a triumph.' 91
 
 credits=('>LIST PERSONNEL' '' '' 'Gautam Babbar' 'Ted Backman' 'Kelly Bailey'
     'Jeff Ballinger' 'Aaron Barber' 'Jeep Barnett' 'Jeremy Bennett'
@@ -293,42 +317,47 @@ credits=('>LIST PERSONNEL' '' '' 'Gautam Babbar' 'Ted Backman' 'Kelly Bailey'
 )
 for ((  line_no=0; line_no<${#credits[@]}; line_no++ )); do
     line=${credits[$line_no]}
+    credits_time=$(date +%s%N)
     for (( char=0; char<${#line}; char++ )); do
         (( cursor_pos_credits++ ))
         sed -i "3s/[0-9]*$/$cursor_pos_credits/" $temp_file
         printf "\033[17;$(( cursor_pos_credits-1 ))H${line:$char:1}"
         print_cursors
-        sleep .066
+
+        if ((  credits_time + 65000000 > $(date +%s%N) )); then
+            sleep $(bc <<< "scale=3; .065+($credits_time-$(date +%s%N))/10^9" )
+        fi
+        credits_time=$(date +%s%N)
     done
     sed -i "3s/[0-9]*$/57/" $temp_file
     for (( l=line_no; l>line_no-15 && l>=0; l-- )); do
         line=${credits[$l]}
-        printf "\033[$(( 16+$l-$line_no ));57H$line%s$(printf ' %.0s' $(seq ${#line} 50))"
+        printf "\033[%s;57H$line$(printf ' %.0s' $(seq ${#line} 50))" \
+            $(( 16+$l-$line_no ))
     done
     printf '\033[17;57H                                                 '
     print_cursors
 done &
 
-# -r rate -d delay -n no newline
+# -r rate -n no newline
 
-print_lyrics -d 2 "I'm making a note here:" -d .1 -r .13 'HUGE SUCCESS.' \
-    -d 1.2 -r 0.09 "It's hard to overstate" -d .3 -r .16 'my satisfaction.' \
-    -d 2.2
+print_lyrics 109 "I'm making a note here:" 132 -r 130 'HUGE SUCCESS.' 159 \
+    -r 90 "It's hard to overstate" 184 -r 160 'my satisfaction.' 232
 
 print_ascii_art 'logo'
 
-print_lyrics 'Aperture Science' -d 2.2 'We do what we must' -d .3 -n \
-    'because ' -d .2 'we can.' -d 1.7 -r .12 'For the good of all of us' -d .3
+print_lyrics 'Aperture Science' 270 'We do what we must' 288 -n 'because ' 297 \
+    'we can.' 321 -r 120 'For the good of all of us' 353
 
 print_ascii_art 'nuclear'
 
-print_lyrics -r .058 'except the ones who are dead.' -d 0 '' -d .6
+print_lyrics -r 58 'except the ones who are dead.' '' 375
 
 print_ascii_art 'logo'
 
-print_lyrics -r 0.07 "But there's no sense crying" -d 0 'over every mistake.' \
-    -d .2 'You just keep on trying' -d 0 -r .068 'till you run out of cake.' \
-    -d .2 -r .075 'And the science gets done.' -d 0
+print_lyrics -r 70 "But there's no sense crying" 'over every mistake.' 414 \
+    'You just keep on trying' -r 68 'till you run out of cake.' 453 -r 75 \
+    'And the science gets done.'
 
 print_ascii_art 'atom'
 
@@ -336,11 +365,10 @@ print_lyrics 'And you make a neat gun.'
 
 print_ascii_art 'logo'
 
-print_lyrics -r .066 'For the people who are' -d .1 'still alive.' -d 1.5 -c \
-    -d .1 -r .028 'Forms FORM-55551-5:' -d 0 -r .045 \
-    'Personnel File Addendum:' -d .7 '' -d 0 'Dear <<Subject Name Here>>,' '' \
-    "I'm not even angry." -d 2.5 -n "I'm being " -d .2 -n -r .3 'so' -d 0 \
-    ' sincere right now.' -d 1.7 -n -r .1 'Even though you '
+print_lyrics -r 65 'For the people who are' 509 'still alive.' 538 -c 539 \
+    -r 28 'Forms FORM-55551-5:' -r 45 'Personnel File Addendum:' 562 '' \
+    'Dear <<Subject Name Here>>,' '' "I'm not even angry." 629 -n "I'm being " \
+    639 -n -r 300 'so' ' sincere right now.' 680 -n -r 100 'Even though you '
 
 print_ascii_art << 'EOF'
                           .,---.
@@ -365,12 +393,12 @@ X################,      -$=X#######@:
                       .,    ..
 EOF
 
-print_lyrics -r .1 'broke my heart.' -n 'And killed ' -d .2 -r .2 'me.' -d 1.8
+print_lyrics -r 100 'broke my heart.' -n 'And killed ' 723 -r 200 'me.' 748
 
 print_ascii_art 'explosion'
 
-print_lyrics -r .07 'And tore me to pieces.' -d 2.3 -n \
-    'And threw every piece ' -d .1 -n -r .1 'into ' -d .1
+print_lyrics -r 70 'And tore me to pieces.' 787 -n 'And threw every piece ' \
+    806 -n -r 100 'into ' 815
 
 print_ascii_art << 'EOF'
                      -\$-
@@ -395,8 +423,7 @@ print_ascii_art << 'EOF'
 $@#MX %+;-                           .
 EOF
 
-print_lyrics -r .15 'a fire.' -d 1.7 -r .095 'As they burned it hurt because' \
-    -d .3
+print_lyrics -r 150 'a fire.' 840 -r 95 'As they burned it hurt because' 872
 
 print_ascii_art << 'EOF'
                                      :X-
@@ -421,27 +448,25 @@ print_ascii_art << 'EOF'
                ,$M-
 EOF
 
-print_lyrics -r .07 'I was so happy for you!' -d .4 'Now these points of data' \
-    -d 0 'make a beautiful line.' "And we're out of beta." -r .08 \
+print_lyrics -r 70 'I was so happy for you!' 893 'Now these points of data' \
+    'make a beautiful line.' "And we're out of beta." -r 80 \
     "We're releasing on time."
 
 print_ascii_art 'explosion'
 
-print_lyrics -r .08 "So I'm GLaD. I got burned."
+print_lyrics -r 80 "So I'm GLaD. I got burned."
 
 print_ascii_art 'atom'
 
-print_lyrics -r .058 'Think of all the things we learned'
+print_lyrics -r 58 'Think of all the things we learned'
 
 print_ascii_art 'logo'
 
-print_lyrics -r .07 'for the people who are' -r .15 'still alive.' -d 1.4 -c \
-    -d .1 -r .02 'Forms FORM-55551-6:' -d 0 -r .04 \
-    'Personnel File Addendum Addendum:' -d .5 '' -d 0 -r .14 \
-    'One last thing:' '' -n 'Go ahead and leave ' -r .2 'me.' -d 1.5 -r .118 \
-    'I think I prefer to stay inside.' -d 1.5 -r .112 \
-    "Maybe you'll find someone else" -d 0 -r .1 'to help you.' -d 2.3 -n \
-    'Maybe '
+print_lyrics -r 70 'for the people who are' -r 150 'still alive.' 1062 -c \
+    1063 -r 20 'Forms FORM-55551-6:' -r 40 'Personnel File Addendum Addendum:' \
+    1089 '' -r 140 'One last thing:' '' -n 'Go ahead and leave ' -r 200 'me.' \
+    1148 -r 118 'I think I prefer to stay inside.' 1202 -r 112 \
+    "Maybe you'll find someone else" -r 100 'to help you.' 1271 -n 'Maybe '
 
 print_ascii_art << 'EOF'
            .-;+$XHHHHHHX$+;-.
@@ -466,8 +491,8 @@ H@:         :HHHHHHHHHHHHHHHHHHX,    =@H
             .-;+$XXHHHHHX$+;-.
 EOF
 
-print_lyrics -n 'Black ' -d 0 -n -r .3 'Mesa' -r .4 '...' -d .5 -n \
-    'THAT WAS A JOKE.' -d 1 ' FAT CHANCE.' -d 1.56 -n -r .25 'Anywa'
+print_lyrics -n 'Black ' -n -r 300 'Mesa' -r 400 '...' 1311 -n \
+    'THAT WAS A JOKE.' 1335 ' FAT CHANCE.' 1363 -n -r 250 'Anywa'
 
 print_ascii_art << 'EOF'
             ,:/+/-
@@ -492,8 +517,8 @@ M###################@%=           =+@MH%
 
 EOF
 
-print_lyrics -r .08 'y, this cake is great.' -r .068 \
-    "It's so delicious and moist." -d .5
+print_lyrics -r 80 'y, this cake is great.' -r 68 \
+    "It's so delicious and moist." 1416
 
 print_ascii_art << 'EOF'
        #+ @      # #              M#@
@@ -518,15 +543,15 @@ print_ascii_art << 'EOF'
                ,=/:, .+X@MMH@#H  #####$=
 EOF
 
-print_lyrics -d .1 -r .08 'Look at me still talking'
+print_lyrics 1416 -r 80 'Look at me still talking'
 
 print_ascii_art 'nuclear'
 
-print_lyrics -r .075 "when there's Science to do."
+print_lyrics -r 75 "when there's Science to do."
 
 print_ascii_art 'logo'
 
-print_lyrics -r .07 'When I look out there,' -r .07 \
+print_lyrics -r 70 'When I look out there,' -r 70 \
     "It makes me GLaD I'm not you."
 
 print_ascii_art 'atom'
@@ -535,17 +560,17 @@ print_lyrics "I've experiments to run."
 
 print_ascii_art 'explosion'
 
-print_lyrics -r .07 'There is research to be done.'
+print_lyrics -r 70 'There is research to be done.'
 
 print_ascii_art 'logo'
 
-print_lyrics -r .078 'On the people who are' -n 'still ' -r .24 'alive.' -c \
-    '' '' '' 'PS: And believe me I am' 'still alive.' -d .8 -n -r .04 'PPS: ' \
-    -d 0 -r .075 "I'm doing science and I'm" 'still alive.' -d .8 -n -r .04 \
-    'PPPS: ' -d 0 -r .075 "I feel FANTASTIC and I'm" 'still alive.' '' \
-    'FINAL THOUGHT:' -r .06 "While you're dying I'll be" 'still alive.' '' \
-    -r .045 'FINAL THOUGHT PS:' -r .06 "And when you're dead I will be" \
-    'still alive.' -d .45 '' 'STILL ALIVE' -d 0 -c
+print_lyrics -r 78 'On the people who are' -n 'still ' -r 240 'alive.' -c \
+    '' '' '' 'PS: And believe me I am' 'still alive.' 1612 -n -r 40 'PPS: ' \
+    -r 75 "I'm doing science and I'm" 'still alive.' 1652 -n -r 40 'PPPS: ' \
+    -r 75 "I feel FANTASTIC and I'm" 'still alive.' '' 'FINAL THOUGHT:' -r 60 \
+    "While you're dying I'll be" 'still alive.' '' -r 45 'FINAL THOUGHT PS:' \
+    -r 60 "And when you're dead I will be" 'still alive.' 1768 '' 1773 \
+    'STILL ALIVE' -c
 
 wait
 
