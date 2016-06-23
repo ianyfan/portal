@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+stty -echo && tput civis # disable entering characters and hide the cursor
+trap 'reset' EXIT
+
 print_cursors() {
     # since parralel processes can't share variables
     # they have to be written and read into a file
@@ -42,35 +45,34 @@ print_lyrics() {
             # if the line is a number (not proceeded by -r)
             # then sleep until that time (in tenths of a second, i.e. 10=1s)
             # measured from the start of animation
+            # 2>/dev/null suppresses warning when negative
             sleep 2>/dev/null \
                 $(bc <<< "scale=3; $line/10+($start-$(date +%s%N))/10^9")
             continue
         fi
 
         local cursor_pos_start=${cursor_pos_lyrics[1]}
-        local time=$(date +%s%N)
+        local start_lyrics=$(date +%s%N)
         for (( char=0; char<${#line}; char++ )); do
-
             # update and record new cursor position
             (( cursor_pos_lyrics[1]++ ))
             sed -i "2s/[0-9]*)/${cursor_pos_lyrics[1]})/" $temp_file
 
-            for _ in 1 2; do # print twice because it sometimes fails first time
-                printf "\033[${cursor_pos_lyrics[0]};%sH${line:$char:1}" \
-                    $(( ${cursor_pos_lyrics[1]}-1 ))
-            done
+            # $? indicates whether the printf was successful
+            until printf "\033[${cursor_pos_lyrics[0]};%sH${line:$char:1}" \
+                $(( ${cursor_pos_lyrics[1]}-1 )); do :; done
 
             print_cursors # redraw the cursor on the next character
 
-            sleep 2>/dev/null \
-                $(bc <<< "scale=3; $rate/10^3+($time-$(date +%s%N))/10^9")
-            time=$(date +%s%N)
+            sleep 2>/dev/null $(bc <<< "scale=3; \
+                ($char+1)*$rate/10^3+($start_lyrics-$(date +%s%N))/10^9")
         done
 
+        # uncomment to use
         # print the entire line again in case some characters failed to print
-        (( cursor_pos_lyrics[1]=cursor_pos_start + ${#line} ))
-        sed -i "2s/[0-9]*)/$(( cursor_pos_start + ${#line} )))/" $temp_file
-        printf "\033[${cursor_pos_lyrics[0]};"$cursor_pos_start"H$line"
+        # (( cursor_pos_lyrics[1]=cursor_pos_start + ${#line} ))
+        # sed -i "2s/[0-9]*)/$(( cursor_pos_start + ${#line} )))/" $temp_file
+        # printf "\033[${cursor_pos_lyrics[0]};"$cursor_pos_start"H$line"
 
         rate=88 # change rate back to default
 
@@ -89,10 +91,13 @@ print_lyrics() {
 }
 
 print_ascii_art() {
-                    # if there is an argument, then it is a string code for a
-                    # piece that is used multiple times, therefore cached here
-    if [ $1 ]; then # if there is no argument
-        case $1 in  # then there is a heredoc containing the art to be printed
+    # if there is an argument, then it is a string code for a piece that is
+    # used multiple times, and therefore cached here
+    # if there is no argument, then there is a heredoc containing the art to
+    # be printed
+
+    if [ $1 ]; then
+        case $1 in
             'logo' ) print_ascii_art << 'EOF'
               .,-:;//;:=,
           . :H@@@MM@M#H/.,+%;,
@@ -187,17 +192,14 @@ EOF
         local line_no=19
         local IFS='' # so that whitespace in the heredoc is preserved
                      # this has the side effect that the spaces printed after
-                     # the art (to cover up any previous residue)
-                     # have to be explicitly 
+                     # the art (to cover up any previous residue) have to be
+                     # explicitly typed (in other cases, an array is used)
         while read -r line; do
             printf "\033[$(( line_no++ ));61H%s\033[49D%s" \
                 '                                                ' $line
         done
     fi
 }
-
-stty -echo && tput civis # disable entering characters and hide the cursor
-trap 'stty echo; tput cnorm' EXIT # undo the above upon exit
 
 temp_file=$(mktemp)
 cat >$temp_file << EOF
@@ -264,7 +266,7 @@ credits=('>LIST PERSONNEL' '' '' 'Gautam Babbar' 'Ted Backman' 'Kelly Bailey'
     'Doug Valente' 'Bill Van Buren' 'Gabe Van Engel' 'Alex Vlachos'
     'Robin Walker' 'Joshua Weier' 'Andrea Wicklund' 'Greg Winkler' 'Erik Wolpaw'
     'Doug Wood' 'Matt T. Wood' 'Danika Wright' 'Matt Wright' 'Shawn Zabecki'
-    'Torsten Zabka' '' '' '' '' "'Still Alive' 'by:" 'Jonathan Coulton' '' '' ''
+    'Torsten Zabka' '' '' '' '' "'Still Alive' by:" 'Jonathan Coulton' '' '' ''
     'Voices:' 'Ellen McLain - GlaDOS, Turrets' 'Mike Patton - THE ANGER SPHERE'
     '' '' '' 'Voice Casting:' 'Shana Landsburg\Teri Fiddleman' '' '' '' ''
     'Voice Recording:' 'Pure Audio, Seattle, WA' '' '' '' '' 'Voice recording'
@@ -278,18 +280,19 @@ credits=('>LIST PERSONNEL' '' '' 'Gautam Babbar' 'Ted Backman' 'Kelly Bailey'
     'THANK YOU FOR PARTICIPATING' 'IN THIS' 'ENRICHMENT CENTER ACTIVITY!!' ''
     '' '' '' '' ''
 )
+chars=1
 for ((  line_no=0; line_no<${#credits[@]}; line_no++ )); do
     line=${credits[$line_no]}
-    time_credits=$(date +%s%N)
-    for (( char=0; char<${#line}; char++ )); do
+    for (( char=0; char<${#line}; char++, chars++ )); do
         (( cursor_pos_credits++ ))
         sed -i "3s/[0-9]*$/$cursor_pos_credits/" $temp_file
+
         printf "\033[17;$(( cursor_pos_credits-1 ))H${line:$char:1}"
+
         print_cursors
 
         sleep 2>/dev/null \
-            $(bc <<< "scale=3; .065+($time_credits-$(date +%s%N))/10^9" )
-        time_credits=$(date +%s%N)
+            $(bc <<< "scale=3; 9.1+.07*$chars+($start-$(date +%s%N))/10^9")
     done
 
     sed -i "3s/[0-9]*$/57/" $temp_file
