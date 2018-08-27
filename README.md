@@ -6,5 +6,7 @@ cd portal                                       # default clone location
 ./portal                                        # do the thing
 ```
 
-Note: this isn't perfect, so occasionally a character won't print, but ~~terrible hacks~~ clever workarounds have been implemented to mitigate this
-
+Dependencies:
+* alsa-utils
+* bc
+* sed

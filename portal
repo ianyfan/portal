@@ -1,15 +1,49 @@
 #!/usr/bin/env bash
 
 stty -echo && tput civis # disable entering characters and hide the cursor
-trap 'reset' EXIT
+trap reset EXIT
+
+dir=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
+if ! command -v bc >/dev/null 2>&1; then
+    bc() {
+        $dir/bc $@
+    }
+fi
+
+temp_dir=$(mktemp --directory)
+cursor_lock=$temp_dir/cursor.lock
+exec 9>$cursor_lock
+
+cursor_file=$temp_dir/cursor
+cat >$cursor_file << EOF
+_ 
+2 3
+57
+EOF
+cursor_status='_ '
+cursor_pos_lyrics=(2 3)
+cursor_pos_credits=57
+
+update_cursors() {
+    flock --no-fork $cursor_lock sed --in-place "$1" $cursor_file
+}
 
 print_cursors() {
-    # since parralel processes can't share variables
+    # since parallel processes can't share variables
     # they have to be written and read into a file
-    # cursor_status is a 2-character string, either 
-    source $temp_file
+    # cursor_status is a 2-character string, either
+    # '_ ' or ' _'
+    flock --no-fork 9 # acquire lock to ensure that the variables are not
+                      # updated before reading and printing
+    {
+        IFS='' read cursor_status # prevent ignoring whitespace
+        read cursor_pos_lyrics_line cursor_pos_lyrics_char
+        read cursor_pos_credits
+    } <$cursor_file
+    cursor_pos_lyrics=($cursor_pos_lyrics_line $cursor_pos_lyrics_char)
     printf "\033[%s;%sH${cursor_status:0:1}" ${cursor_pos_lyrics[@]}
     printf '\033[17;'$cursor_pos_credits"H${cursor_status:1:1}"
+    flock --unlock 9
 }
 
 print_lyrics() {
@@ -31,10 +65,9 @@ print_lyrics() {
                 new_line=false
              ;; c ) # clear the screen
                 cursor_pos_lyrics=(2 3)
-                sed -i '2s/(.*)/(2 3)/' $temp_file
+                update_cursors '2s/.*/2 3/'
                 for i in {2..35}; do
-                    printf "\033[$i;3H%s" \
-                        '                                                 '
+                    printf "\033[$i;3H                                                 "
                 done
              ;;
             esac
@@ -46,8 +79,7 @@ print_lyrics() {
             # then sleep until that time (in tenths of a second, i.e. 10=1s)
             # measured from the start of animation
             # 2>/dev/null suppresses warning when negative
-            sleep 2>/dev/null \
-                $(bc <<< "scale=3; $line/10+($start-$(date +%s%N))/10^9")
+            sleep 2>/dev/null $(bc <<< "scale=3; $line/10+($start-$(date +%s%N))/10^9")
             continue
         fi
 
@@ -56,32 +88,23 @@ print_lyrics() {
         for (( char=0; char<${#line}; char++ )); do
             # update and record new cursor position
             (( cursor_pos_lyrics[1]++ ))
-            sed -i "2s/[0-9]*)/${cursor_pos_lyrics[1]})/" $temp_file
+            update_cursors "2s/[0-9]*$/${cursor_pos_lyrics[1]}/"
 
-            # $? indicates whether the printf was successful
-            until printf "\033[${cursor_pos_lyrics[0]};%sH${line:$char:1}" \
-                $(( ${cursor_pos_lyrics[1]}-1 )); do :; done
+            # print character
+            printf "\033[${cursor_pos_lyrics[0]};%sH${line:$char:1}" $(( ${cursor_pos_lyrics[1]}-1 ))
 
             print_cursors # redraw the cursor on the next character
 
-            sleep 2>/dev/null $(bc <<< "scale=3; \
-                ($char+1)*$rate/10^3+($start_lyrics-$(date +%s%N))/10^9")
+            sleep 2>/dev/null $(bc <<< "scale=3; ($char+1)*$rate/10^3+($start_lyrics-$(date +%s%N))/10^9")
         done
-
-        # uncomment to use
-        # print the entire line again in case some characters failed to print
-        # (( cursor_pos_lyrics[1]=cursor_pos_start + ${#line} ))
-        # sed -i "2s/[0-9]*)/$(( cursor_pos_start + ${#line} )))/" $temp_file
-        # printf "\033[${cursor_pos_lyrics[0]};"$cursor_pos_start"H$line"
 
         rate=88 # change rate back to default
 
         if [ "$new_line" = true ]; then
-            last_char=${cursor_pos_lyrics[@]}
-            sed -i "2s/(.*)/($(( cursor_pos_lyrics[0]+1 )) 3)/" $temp_file
+            update_cursors "2s/.*/$(( cursor_pos_lyrics[0]+1 )) 3/"
 
             # print a space over where the cursor used to be
-            printf '\033[%s;%sH ' ${last_char[@]}
+            printf '\033[%s;%sH ' ${cursor_pos_lyrics[@]}
 
             print_cursors
         else
@@ -90,15 +113,20 @@ print_lyrics() {
     done
 }
 
-print_ascii_art() {
-    # if there is an argument, then it is a string code for a piece that is
-    # used multiple times, and therefore cached here
-    # if there is no argument, then there is a heredoc containing the art to
-    # be printed
+_print_ascii_art() {
+    local line_no=19
+    local IFS='' # so that whitespace in the heredoc is preserved
+                 # this has the side effect that the spaces printed after
+                 # the art (to cover up any previous residue) have to be
+                 # explicitly typed (in other cases, an array is used)
+    while read -r line; do
+        printf "\033[$(( line_no++ ));61H                                                \033[49D%s" $line
+    done
+}
 
-    if [ $1 ]; then
-        case $1 in
-            'logo' ) print_ascii_art << 'EOF'
+print_ascii_art() {
+    case $1 in
+        logo ) _print_ascii_art << 'EOF'
               .,-:;//;:=,
           . :H@@@MM@M#H/.,+%;,
        ,/X+ +M@@M@MM%=,-%HMMM@X/,
@@ -120,7 +148,7 @@ print_ascii_art() {
          ,:+$+-,/H#MMMMMMM@= =,
                =++%%%%+/:-.
 EOF
-            ;; 'explosion' ) print_ascii_art << 'EOF'
+     ;; explosion ) _print_ascii_art << 'EOF'
             .+
              /M;
               H#@:              ;,
@@ -142,7 +170,7 @@ EOF
                  .#H,               :XH,
                   +                   .;-
 EOF
-            ;; 'atom' ) print_ascii_art << 'EOF'
+     ;; atom ) _print_ascii_art << 'EOF'
                  =/;;/-
                 +:    //
                /;      /;
@@ -164,7 +192,51 @@ M-       ,=;;;#:,      ,:#;;:=,       ,@
                 //    +;
                  ,////,
 EOF
-            ;; 'nuclear' ) print_ascii_art << 'EOF'
+     ;; heart ) _print_ascii_art << 'EOF'
+                          .,---.
+                        ,/XM#MMMX;,
+                      -%##########M%,
+                     -@######%  $###@=
+      .,--,         -H#######$   $###M:
+   ,;$M###MMX;     .;##########$;HM###X=
+ ,/@##########H=      ;################+
+-+#############M/,      %##############+
+%M###############=      /##############:
+H################      .M#############;.
+@###############M      ,@###########M:.
+X################,      -$=X#######@:
+/@##################%-     +######$-
+.;##################X     .X#####+,
+ .;H################/     -X####+.
+   ,;X##############,       .MM/
+      ,:+$H@M#######M#$-    .$$=
+           .,-=;+$@###X:    ;/=.
+                  .,/X$;   .::,
+                      .,    ..
+EOF
+     ;; fire ) _print_ascii_art << 'EOF'
+                     -\$-
+                    .H##H,
+                   +######+
+                .+#########H.
+              -$############@.
+            =H###############@  -X:
+          .$##################:  @#@-
+     ,:  .M###################;  H###;
+   ;@#:  @###################@  ,#####:
+ -M###.  M#################@.  ;######H
+ M####-  +###############$   =@#######X
+ H####$   -M###########+   :#########M,
+  /####X-   =########%   :M########@/.
+    ,;%H@X;   .$###X   :##MM@%+;:-
+                 ..
+  -/;:-,.              ,,-==+M########H
+ -##################@HX%%+%%$%%%+:,,
+    .-/H%%%+%%$H@###############M@+=:/+:
+/XHX%:#####MH%=    ,---:;;;;/%%XHM,:###$
+$@#MX %+;-                           .
+EOF
+     ;; nuclear ) _print_ascii_art << 'EOF'
              =+$HM####@H%;,
           /H##############M$,
           ,@################+
@@ -186,41 +258,109 @@ X##############%,      ,+##############X
     .+M###@,                ,@###M+.
        :XH.                  .HX:
 EOF
-            ;;
-        esac
-    else
-        local line_no=19
-        local IFS='' # so that whitespace in the heredoc is preserved
-                     # this has the side effect that the spaces printed after
-                     # the art (to cover up any previous residue) have to be
-                     # explicitly typed (in other cases, an array is used)
-        while read -r line; do
-            printf "\033[$(( line_no++ ));61H%s\033[49D%s" \
-                '                                                ' $line
-        done
-    fi
-}
-
-temp_file=$(mktemp)
-cat >$temp_file << EOF
-cursor_status='_ '
-cursor_pos_lyrics=(2 3)
-cursor_pos_credits=57
+     ;; tick ) _print_ascii_art << 'EOF'
+                                     :X-
+                                  :X###
+                                ;@####@
+                              ;M######X
+                            -@########$
+                          .$##########@
+                         =M############-
+                        +##############$
+                      .H############$=.
+         ,/:         ,M##########M;.
+      -+@###;       =##########M;
+   =%M#######;     :#########M/
+-$M###########;   :#########/
+ ,;X###########; =########$.
+     ;H#########+#######M=
+       ,+##############+
+          /M#########@-
+            ;M######%
+              +####:
+               ,$M-
 EOF
-source $temp_file # to avoid writing the same thing twice
+     ;; mesa ) _print_ascii_art << 'EOF'
+           .-;+$XHHHHHHX$+;-.
+        ,;X@@X%/;=----=:/%X@@X/
+      =$@@%=.              .=+H@X:
+    -XMX:                      =XMX=
+   /@@:                          =H@+
+  %@X,                            .$@$
+ +@X.                               $@%
+-@@,                                .@@=
+%@%                                  +@$
+H@:                                  :@H
+H@:         :HHHHHHHHHHHHHHHHHHX,    =@H
+%@%         ;@M@@@@@@@@@@@@@@@@@H-   +@$
+=@@,        :@@@@@@@@@@@@@@@@@@@@@= .@@:
+ +@X        :@@@@@@@@@@@@@@@M@@@@@@:%@%
+  $@$,      ;@@@@@@@@@@@@@@@@@M@@@@@@$.
+   +@@HHHHHHH@@@@@@@@@@@@@@@@@@@@@@@+
+    =X@@@@@@@@@@@@@@@@@@@@@@@@@@@@X=
+      :$@@@@@@@@@@@@@@@@@@@M@@@@$:
+        ,;$@@@@@@@@@@@@@@@@@@X/-
+            .-;+$XXHHHHHX$+;-.
+EOF
+     ;; cake ) _print_ascii_art << 'EOF'
+            ,:/+/-
+            /M/              .,-=;//;-
+       .:/= ;MH/,    ,=/+%$XH@MM#@:
+      -$##@+$###@H@MMM#######H:.    -/H#
+ .,H@H@ X######@ -H#####@+-     -+H###@X
+  .,@##H;      +XM##M/,     =%@###@X;-
+X%-  :M##########$.    .:%M###@%:
+M##H,   +H@@@$/-.  ,;$M###@%,          -
+M####M=,,---,.-%%H####M$:          ,+@##
+@##################@/.         :%H##@$-
+M###############H,         ;HM##M$=
+#################.    .=$M##M$=
+################H..;XM##M$=          .:+
+M###################@%=           =+@MH%
+@################M/.          =+H#X%=
+=+M##############M,       -/X#X+;.
+  .;XM##########H=    ,/X#H+:.
+     ,:/%XM####H/.
+          ,.:=-.
+
+EOF
+     ;; glados ) _print_ascii_art << 'EOF'
+       #+ @      # #              M#@
+ .    .X  X.%##@;# #   +@#######X. @#%
+   ,==.   ,######M+  -#####%M####M-    #
+  :H##M%:=##+ .M##M,;#####/+#######% ,M#
+ .M########=  -@#@.=#####M=M#######=  X#
+ :@@MMM##M.  -##M.,#######M#######. =  M
+             @##..###:.    .H####, @@ X,
+   ############: ###,/####;  /##= @#. M
+           ,M## ;##,@#M;/M#M  @# X#% X#
+.%=   ######M## ##.M#:   ./#M ,M #M ,#$
+##/         $## #+;#: #### ;#/ M M- @# :
+#+ #M@MM###M-;M #:$#-##$H# .#X @ + $#. #
+      ######/.: #%=# M#:MM./#.-#  @#: H#
++,.=   @###: /@ %#,@  ##@X #,-#@.##% .@#
+#####+;/##/ @##  #@,+       /#M    . X,
+   ;###M#@ M###H .#M-     ,##M  ;@@; ###
+   .M###%  ;####X ,@#######M/ -M###$  -H
+    .M###%  X####H  .@@MM@;  ;@#M@
+      H#M    /@####/      ,++.  / ==-,
+               ,=/:, .+X@MMH@#H  #####$=
+EOF
+     ;;
+    esac
+}
 
 printf '\e[8;38;108t\[\033[48;5;0;38;5;178m\]' # set dimensions, then colours
 clear
-printf ' ---------------------------------------------------- %.0s' _ _
-printf "$(printf '|                                                    |%.0s' \
-    1 2)\n%.0s" {1..16}
-printf '|                                                    | %s\n' \
-        '----------------------------------------------------'
+printf ' ---------------------------------------------------- %.0s' 1 2
+printf '\n'
+printf "$(printf '|                                                    |%.0s' 1 2)\n%.0s" {1..16}
+printf '|                                                    | ----------------------------------------------------\n'
 printf '|                                                    |\n%.0s' {1..17}
 printf ' ----------------------------------------------------'
 
-while true; do
-    sed -i "1s/'.*'/'${cursor_status:1:1}${cursor_status:0:1}'/" $temp_file
+while true; do # blink cursors
+    update_cursors "1s/.*/${cursor_status:1:1}${cursor_status:0:1}/"
     print_cursors
     sleep .3
 done &
@@ -229,11 +369,12 @@ start=$(date +%s%N)
 print_lyrics 1 -r 80 'Form FORM-29827281-12:' -r 80 'Test Assessment Report' \
     '' '' 70
 
-aplay -q still_alive.wav &
+aplay -q $dir/still_alive.wav &
 
 print_lyrics 'This was a triumph.' 91
 
-credits=('>LIST PERSONNEL' '' '' 'Gautam Babbar' 'Ted Backman' 'Kelly Bailey'
+credits=(
+    '>LIST PERSONNEL' '' '' 'Gautam Babbar' 'Ted Backman' 'Kelly Bailey'
     'Jeff Ballinger' 'Aaron Barber' 'Jeep Barnett' 'Jeremy Bennett'
     'Dan Berger' 'Yahm Bernier' 'Ken Birdwell' 'Derrick Birum' 'Mike Blaszczak'
     'Iestyn Bleasdale-Shepherd' 'Chris Bokitch' 'Steve Bond' 'Matt Boone'
@@ -285,151 +426,87 @@ for ((  line_no=0; line_no<${#credits[@]}; line_no++ )); do
     line=${credits[$line_no]}
     for (( char=0; char<${#line}; char++, chars++ )); do
         (( cursor_pos_credits++ ))
-        sed -i "3s/[0-9]*$/$cursor_pos_credits/" $temp_file
+        update_cursors "3s/.*/$cursor_pos_credits/"
 
         printf "\033[17;$(( cursor_pos_credits-1 ))H${line:$char:1}"
 
         print_cursors
 
-        sleep 2>/dev/null \
-            $(bc <<< "scale=3; 9.1+.07*$chars+($start-$(date +%s%N))/10^9")
+        sleep 2>/dev/null $(bc <<< "scale=3; 9.1+.07*$chars+($start-$(date +%s%N))/10^9")
     done
 
-    sed -i "3s/[0-9]*$/57/" $temp_file
+    update_cursors "3s/.*/57/"
 
     # move the lines up
     for (( l=line_no; l>line_no-15 && l>=0; l-- )); do
         line=${credits[$l]}
-        printf "\033[%s;57H$line$(printf ' %.0s' $(seq ${#line} 50))" \
-            $(( 16+$l-$line_no ))
+        printf "\033[$(( 16+$l-$line_no ));57H$line$(printf ' %.0s' $(seq ${#line} 50))"
     done
 
     printf '\033[17;57H                                                 '
     print_cursors
 done &
 
-# -r rate -n no newline
+# -c clear
+# -n no newline
+# -r rate
 
 print_lyrics 109 "I'm making a note here:" 132 -r 130 'HUGE SUCCESS.' 159 \
     -r 90 "It's hard to overstate" 184 -r 160 'my satisfaction.' 232
 
-print_ascii_art 'logo'
+print_ascii_art logo
 
 print_lyrics 'Aperture Science' 270 'We do what we must' 288 -n 'because ' 297 \
     'we can.' 321 -r 120 'For the good of all of us' 353
 
-print_ascii_art 'nuclear'
+print_ascii_art nuclear
 
 print_lyrics -r 58 'except the ones who are dead.' '' 375
 
-print_ascii_art 'logo'
+print_ascii_art logo
 
 print_lyrics -r 70 "But there's no sense crying" 'over every mistake.' 414 \
     'You just keep on trying' -r 68 'till you run out of cake.' 453 -r 75 \
     'And the science gets done.'
 
-print_ascii_art 'atom'
+print_ascii_art atom
 
 print_lyrics 'And you make a neat gun.'
 
-print_ascii_art 'logo'
+print_ascii_art logo
 
 print_lyrics -r 65 'For the people who are' 509 'still alive.' 538 -c 539 \
     -r 28 'Forms FORM-55551-5:' -r 45 'Personnel File Addendum:' 562 '' \
     'Dear <<Subject Name Here>>,' '' "I'm not even angry." 629 -n "I'm being " \
     639 -n -r 300 'so' ' sincere right now.' 680 -n -r 100 'Even though you '
 
-print_ascii_art << 'EOF'
-                          .,---.
-                        ,/XM#MMMX;,
-                      -%##########M%,
-                     -@######%  $###@=
-      .,--,         -H#######$   $###M:
-   ,;$M###MMX;     .;##########$;HM###X=
- ,/@##########H=      ;################+
--+#############M/,      %##############+
-%M###############=      /##############:
-H################      .M#############;.
-@###############M      ,@###########M:.
-X################,      -$=X#######@:
-/@##################%-     +######$-
-.;##################X     .X#####+,
- .;H################/     -X####+.
-   ,;X##############,       .MM/
-      ,:+$H@M#######M#$-    .$$=
-           .,-=;+$@###X:    ;/=.
-                  .,/X$;   .::,
-                      .,    ..
-EOF
+print_ascii_art heart
 
 print_lyrics -r 100 'broke my heart.' -n 'And killed ' 723 -r 200 'me.' 748
 
-print_ascii_art 'explosion'
+print_ascii_art explosion
 
-print_lyrics -r 70 'And tore me to pieces.' 787 -n 'And threw every piece ' \
-    806 -n -r 100 'into ' 815
+print_lyrics -r 70 'And tore me to pieces.' 787 -n 'And threw every piece ' 806 -n -r 100 'into ' 815
 
-print_ascii_art << 'EOF'
-                     -\$-
-                    .H##H,
-                   +######+
-                .+#########H.
-              -$############@.
-            =H###############@  -X:
-          .$##################:  @#@-
-     ,:  .M###################;  H###;
-   ;@#:  @###################@  ,#####:
- -M###.  M#################@.  ;######H
- M####-  +###############$   =@#######X
- H####$   -M###########+   :#########M,
-  /####X-   =########%   :M########@/.
-    ,;%H@X;   .$###X   :##MM@%+;:-
-                 ..
-  -/;:-,.              ,,-==+M########H
- -##################@HX%%+%%$%%%+:,,
-    .-/H%%%+%%$H@###############M@+=:/+:
-/XHX%:#####MH%=    ,---:;;;;/%%XHM,:###$
-$@#MX %+;-                           .
-EOF
+print_ascii_art fire
 
 print_lyrics -r 150 'a fire.' 840 -r 95 'As they burned it hurt because' 872
 
-print_ascii_art << 'EOF'
-                                     :X-
-                                  :X###
-                                ;@####@
-                              ;M######X
-                            -@########$
-                          .$##########@
-                         =M############-
-                        +##############$
-                      .H############$=.
-         ,/:         ,M##########M;.
-      -+@###;       =##########M;
-   =%M#######;     :#########M/
--$M###########;   :#########/
- ,;X###########; =########$.
-     ;H#########+#######M=
-       ,+##############+
-          /M#########@-
-            ;M######%
-              +####:
-               ,$M-
-EOF
+print_ascii_art tick
 
 print_lyrics -r 70 'I was so happy for you!' 893 'Now these points of data' \
     'make a beautiful line.' "And we're out of beta." -r 80 \
     "We're releasing on time."
 
-print_ascii_art 'explosion'
+print_ascii_art explosion
 
 print_lyrics -r 80 "So I'm GLaD. I got burned."
 
-print_ascii_art 'atom'
+print_ascii_art atom
 
 print_lyrics -r 58 'Think of all the things we learned'
 
-print_ascii_art 'logo'
+print_ascii_art logo
 
 print_lyrics -r 70 'for the people who are' -r 150 'still alive.' 1062 -c \
     1063 -r 20 'Forms FORM-55551-6:' -r 40 'Personnel File Addendum Addendum:' \
@@ -437,101 +514,36 @@ print_lyrics -r 70 'for the people who are' -r 150 'still alive.' 1062 -c \
     1148 -r 118 'I think I prefer to stay inside.' 1202 -r 112 \
     "Maybe you'll find someone else" -r 100 'to help you.' 1271 -n 'Maybe '
 
-print_ascii_art << 'EOF'
-           .-;+$XHHHHHHX$+;-.
-        ,;X@@X%/;=----=:/%X@@X/
-      =$@@%=.              .=+H@X:
-    -XMX:                      =XMX=
-   /@@:                          =H@+
-  %@X,                            .$@$
- +@X.                               $@%
--@@,                                .@@=
-%@%                                  +@$
-H@:                                  :@H
-H@:         :HHHHHHHHHHHHHHHHHHX,    =@H
-%@%         ;@M@@@@@@@@@@@@@@@@@H-   +@$
-=@@,        :@@@@@@@@@@@@@@@@@@@@@= .@@:
- +@X        :@@@@@@@@@@@@@@@M@@@@@@:%@%
-  $@$,      ;@@@@@@@@@@@@@@@@@M@@@@@@$.
-   +@@HHHHHHH@@@@@@@@@@@@@@@@@@@@@@@+
-    =X@@@@@@@@@@@@@@@@@@@@@@@@@@@@X=
-      :$@@@@@@@@@@@@@@@@@@@M@@@@$:
-        ,;$@@@@@@@@@@@@@@@@@@X/-
-            .-;+$XXHHHHHX$+;-.
-EOF
+print_ascii_art mesa
 
 print_lyrics -n 'Black ' -n -r 300 'Mesa' -r 400 '...' 1311 -n \
     'THAT WAS A JOKE.' 1335 ' FAT CHANCE.' 1363 -n -r 250 'Anywa'
 
-print_ascii_art << 'EOF'
-            ,:/+/-
-            /M/              .,-=;//;-
-       .:/= ;MH/,    ,=/+%$XH@MM#@:
-      -$##@+$###@H@MMM#######H:.    -/H#
- .,H@H@ X######@ -H#####@+-     -+H###@X
-  .,@##H;      +XM##M/,     =%@###@X;-
-X%-  :M##########$.    .:%M###@%:
-M##H,   +H@@@$/-.  ,;$M###@%,          -
-M####M=,,---,.-%%H####M$:          ,+@##
-@##################@/.         :%H##@$-
-M###############H,         ;HM##M$=
-#################.    .=$M##M$=
-################H..;XM##M$=          .:+
-M###################@%=           =+@MH%
-@################M/.          =+H#X%=
-=+M##############M,       -/X#X+;.
-  .;XM##########H=    ,/X#H+:.
-     ,:/%XM####H/.
-          ,.:=-.
+print_ascii_art cake
 
-EOF
+print_lyrics -r 80 'y, this cake is great.' -r 68 "It's so delicious and moist." 1416
 
-print_lyrics -r 80 'y, this cake is great.' -r 68 \
-    "It's so delicious and moist." 1416
-
-print_ascii_art << 'EOF'
-       #+ @      # #              M#@
- .    .X  X.%##@;# #   +@#######X. @#%
-   ,==.   ,######M+  -#####%M####M-    #
-  :H##M%:=##+ .M##M,;#####/+#######% ,M#
- .M########=  -@#@.=#####M=M#######=  X#
- :@@MMM##M.  -##M.,#######M#######. =  M
-             @##..###:.    .H####, @@ X,
-   ############: ###,/####;  /##= @#. M
-           ,M## ;##,@#M;/M#M  @# X#% X#
-.%=   ######M## ##.M#:   ./#M ,M #M ,#$
-##/         $## #+;#: #### ;#/ M M- @# :
-#+ #M@MM###M-;M #:$#-##$H# .#X @ + $#. #
-      ######/.: #%=# M#:MM./#.-#  @#: H#
-+,.=   @###: /@ %#,@  ##@X #,-#@.##% .@#
-#####+;/##/ @##  #@,+       /#M    . X,
-   ;###M#@ M###H .#M-     ,##M  ;@@; ###
-   .M###%  ;####X ,@#######M/ -M###$  -H
-    .M###%  X####H  .@@MM@;  ;@#M@
-      H#M    /@####/      ,++.  / ==-,
-               ,=/:, .+X@MMH@#H  #####$=
-EOF
+print_ascii_art glados
 
 print_lyrics 1416 -r 80 'Look at me still talking'
 
-print_ascii_art 'nuclear'
+print_ascii_art nuclear
 
 print_lyrics -r 75 "when there's Science to do."
 
-print_ascii_art 'logo'
+print_ascii_art logo
 
-print_lyrics -r 70 'When I look out there,' -r 70 \
-    "It makes me GLaD I'm not you."
+print_lyrics -r 70 'When I look out there,' -r 70 "It makes me GLaD I'm not you."
 
-print_ascii_art 'atom'
+print_ascii_art atom
 
 print_lyrics "I've experiments to run."
 
-print_ascii_art 'explosion'
+print_ascii_art explosion
 
 print_lyrics -r 70 'There is research to be done.'
 
-print_ascii_art 'logo'
+print_ascii_art logo
 
 print_lyrics -r 78 'On the people who are' -n 'still ' -r 240 'alive.' -c \
     '' '' '' 'PS: And believe me I am' 'still alive.' 1612 -n -r 40 'PPS: ' \
@@ -542,4 +554,3 @@ print_lyrics -r 78 'On the people who are' -n 'still ' -r 240 'alive.' -c \
     'STILL ALIVE' -c
 
 wait
-
