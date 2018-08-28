@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 
 stty -echo && tput civis # disable entering characters and hide the cursor
-trap reset EXIT
+cleanup() {
+	rm $cursor_file
+	rm $cursor_lock
+	rmdir $temp_dir
+	reset
+}
+trap cleanup EXIT
 
 dir=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
 if ! command -v bc >/dev/null 2>&1; then
@@ -10,7 +16,7 @@ if ! command -v bc >/dev/null 2>&1; then
     }
 fi
 
-temp_dir=$(mktemp --directory)
+temp_dir=$(mktemp --directory --tmpdir=/tmp portal-XXX)
 cursor_lock=$temp_dir/cursor.lock
 exec 9>$cursor_lock
 
