@@ -2,36 +2,36 @@
 
 stty -echo && tput civis # disable entering characters and hide the cursor
 cleanup() {
-	rm $cursor_file
-	rm $cursor_lock
-	rmdir $temp_dir
-	reset
+    rm $cursor_file
+    reset
 }
 trap cleanup EXIT
 
-dir=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
-if ! command -v bc >/dev/null 2>&1; then
-    bc() {
-        $dir/bc $@
-    }
-fi
-
-temp_dir=$(mktemp --directory --tmpdir=/tmp portal-XXX)
-cursor_lock=$temp_dir/cursor.lock
-exec 9>$cursor_lock
-
-cursor_file=$temp_dir/cursor
+cursor_file=$(mktemp --tmpdir=/tmp portal-XXX)
 cat >$cursor_file << EOF
 _ 
 2 3
 57
 EOF
 cursor_status='_ '
-cursor_pos_lyrics=(2 3)
+cursor_pos_lyrics_line=2
+cursor_pos_lyrics_char=3
 cursor_pos_credits=57
 
+to_secs() { # convert nanoseconds to seconds
+    local l=${#1}
+    if (( $1 < 0 )); then # clamp negative values
+        echo 0
+    elif (( $l < 9 )); then # pad with zeros
+        local zeros=000000000
+        echo .${zeros:$l}$1
+    else
+        echo ${1:0:$l-9}.${1:$l-9}
+    fi
+}
+
 update_cursors() {
-    flock --no-fork $cursor_lock sed --in-place "$1" $cursor_file
+    flock --no-fork $cursor_file sed --in-place "$1" $cursor_file
 }
 
 print_cursors() {
@@ -39,18 +39,12 @@ print_cursors() {
     # they have to be written and read into a file
     # cursor_status is a 2-character string, either
     # '_ ' or ' _'
-    flock --no-fork 9 # acquire lock to ensure that the variables are not
-                      # updated before reading and printing
-    {
-        IFS='' read cursor_status # prevent ignoring whitespace
-        read cursor_pos_lyrics_line cursor_pos_lyrics_char
-        read cursor_pos_credits
-    } <$cursor_file
-    cursor_pos_lyrics=($cursor_pos_lyrics_line $cursor_pos_lyrics_char)
-    printf "\033[%s;%sH${cursor_status:0:1}" ${cursor_pos_lyrics[@]}
+    IFS='' read cursor_status # prevent ignoring whitespace
+    read cursor_pos_lyrics_line cursor_pos_lyrics_char
+    read cursor_pos_credits
+    printf "\033[$cursor_pos_lyrics_line;$cursor_pos_lyrics_char""H${cursor_status:0:1}"
     printf '\033[17;'$cursor_pos_credits"H${cursor_status:1:1}"
-    flock --unlock 9
-}
+} <$cursor_file
 
 print_lyrics() {
     local new_line=true
@@ -70,7 +64,8 @@ print_lyrics() {
              ;; n ) # set a variable to remember for the next line
                 new_line=false
              ;; c ) # clear the screen
-                cursor_pos_lyrics=(2 3)
+                cursor_pos_lyrics_line=2
+                cursor_pos_lyrics_char=3
                 update_cursors '2s/.*/2 3/'
                 for i in {2..35}; do
                     printf "\033[$i;3H                                                 "
@@ -84,33 +79,31 @@ print_lyrics() {
             # if the line is a number (not proceeded by -r)
             # then sleep until that time (in tenths of a second, i.e. 10=1s)
             # measured from the start of animation
-            # 2>/dev/null suppresses warning when negative
-            sleep 2>/dev/null $(bc <<< "scale=3; $line/10+($start-$(date +%s%N))/10^9")
+            sleep $(to_secs $((100000000*$line+$start-$(date +%s%N))))
             continue
         fi
 
-        local cursor_pos_start=${cursor_pos_lyrics[1]}
         local start_lyrics=$(date +%s%N)
         for (( char=0; char<${#line}; char++ )); do
             # update and record new cursor position
-            (( cursor_pos_lyrics[1]++ ))
-            update_cursors "2s/[0-9]*$/${cursor_pos_lyrics[1]}/"
+            (( cursor_pos_lyrics_char++ ))
+            update_cursors "2s/[0-9]*$/$cursor_pos_lyrics_char/"
 
             # print character
-            printf "\033[${cursor_pos_lyrics[0]};%sH${line:$char:1}" $(( ${cursor_pos_lyrics[1]}-1 ))
+            printf "\033[$cursor_pos_lyrics_line;$(( cursor_pos_lyrics_char-1 ))H${line:$char:1}"
 
             print_cursors # redraw the cursor on the next character
 
-            sleep 2>/dev/null $(bc <<< "scale=3; ($char+1)*$rate/10^3+($start_lyrics-$(date +%s%N))/10^9")
+            sleep $(to_secs $((1000000*($char+1)*$rate+$start_lyrics-$(date +%s%N))))
         done
 
         rate=88 # change rate back to default
 
         if [ "$new_line" = true ]; then
-            update_cursors "2s/.*/$(( cursor_pos_lyrics[0]+1 )) 3/"
+            update_cursors "2s/.*/$(( cursor_pos_lyrics_line+1 )) 3/"
 
             # print a space over where the cursor used to be
-            printf '\033[%s;%sH ' ${cursor_pos_lyrics[@]}
+            printf "\033[$cursor_pos_lyrics_line;$cursor_pos_lyrics_char"'H '
 
             print_cursors
         else
@@ -375,6 +368,7 @@ start=$(date +%s%N)
 print_lyrics 1 -r 80 'Form FORM-29827281-12:' -r 80 'Test Assessment Report' \
     '' '' 70
 
+dir=$(dirname $0)
 aplay -q $dir/still_alive.wav &
 
 print_lyrics 'This was a triumph.' 91
@@ -438,7 +432,7 @@ for ((  line_no=0; line_no<${#credits[@]}; line_no++ )); do
 
         print_cursors
 
-        sleep 2>/dev/null $(bc <<< "scale=3; 9.1+.07*$chars+($start-$(date +%s%N))/10^9")
+        sleep 2>/dev/null $(to_secs $((9100000000+70000000*$chars+$start-$(date +%s%N))))
     done
 
     update_cursors "3s/.*/57/"

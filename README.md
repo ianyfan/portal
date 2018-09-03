@@ -8,5 +8,4 @@ cd portal                                       # default clone location
 
 Dependencies:
 * alsa-utils
-* bc
 * sed
