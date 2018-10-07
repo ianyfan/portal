@@ -552,6 +552,6 @@ print_lyrics -r 78 'On the people who are' -n 'still ' -r 240 'alive.' -c \
     -r 75 "I feel FANTASTIC and I'm" 'still alive.' '' 'FINAL THOUGHT:' -r 60 \
     "While you're dying I'll be" 'still alive.' '' -r 45 'FINAL THOUGHT PS:' \
     -r 60 "And when you're dead I will be" 'still alive.' 1768 '' 1773 \
-    'STILL ALIVE' -c
+    'STILL ALIVE' '' -c
 
 wait
