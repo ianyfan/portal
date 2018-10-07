@@ -8,7 +8,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cursor_file=$(mktemp --tmpdir=/tmp portal-XXX)
+cursor_file=$(mktemp --tmpdir portal-XXX)
 cat >$cursor_file << EOF
 _ 
 2 3
